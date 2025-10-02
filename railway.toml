@@ -1,8 +1,14 @@
+[build]
+builder = "nixpacks"
+
 [phases.setup]
 nixPkgs = ["jdk17"]
 
+[phases.install]
+cmd = "./gradlew dependencies"
+
 [phases.build]
-cmd = "./gradlew build -x test"
+cmd = "./gradlew clean build -x check -x test -Pproduction"
 
 [phases.start]
 cmd = "java -jar build/libs/bpmn-generator-0.0.1-SNAPSHOT.jar"

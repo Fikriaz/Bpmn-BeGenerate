@@ -17,7 +17,7 @@ public class CorsConfig {
                         .allowedOrigins(
                                 "http://localhost:5173",   // FE lokal
                                 "https://automation-test.up.railway.app", // optional
-                                "https://<nama-project-vercel>.vercel.app" // nanti kalau deploy FE
+                                "https://bpmn-generator-kohl.vercel.app" // nanti kalau deploy FE
                         )
                         .allowedMethods("*")
                         .allowedHeaders("*")

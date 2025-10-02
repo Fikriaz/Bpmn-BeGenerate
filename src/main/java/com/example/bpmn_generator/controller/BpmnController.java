@@ -323,7 +323,73 @@ public class BpmnController {
     }
     /* === helper: current User (username only, entity loaded lewat BpmnService/AuthService kalau perlu) === */
 
+    // UPDATED: Download All Scenarios - Support both Excel and PDF
+    @PostMapping("/files/{id}/download-all")
+    public ResponseEntity<Resource> downloadAllScenarios(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> downloadRequest
+    ) {
+        String username = currentUsername();
+        if (username == null) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
 
+        Optional<BpmnFile> fileOpt = bpmnRepository.findById(id);
+        if (fileOpt.isEmpty()) return ResponseEntity.notFound().build();
+
+        BpmnFile file = fileOpt.get();
+
+        if (!isOwner(file, username)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
+        try {
+            String format = (String) downloadRequest.get("format");
+            Boolean includeTester = (Boolean) downloadRequest.get("includeTester");
+            String testerName = (String) downloadRequest.get("testerName");
+
+            Map<String, Object> allScenariosData = new HashMap<>();
+            allScenariosData.put("fileName", file.getOriginalFileName());
+            allScenariosData.put("scenarios", file.getTestScenariosJson());
+            allScenariosData.put("includeTester", includeTester);
+            allScenariosData.put("testerName", (includeTester != null && includeTester && testerName != null) ? testerName : "");
+
+            System.out.println("=== Download All Scenarios Debug ===");
+            System.out.println("File ID: " + id);
+            System.out.println("Format: " + format);
+            System.out.println("Include Tester: " + includeTester);
+            System.out.println("Total scenarios: " + file.getTestScenariosJson().size());
+
+            Resource resource;
+            String contentType;
+            String fileExtension;
+
+            if ("pdf".equalsIgnoreCase(format)) {
+                // Generate PDF for all scenarios
+                resource = exportService.generatePdfFromAllScenarios(allScenariosData);
+                contentType = "application/pdf";
+                fileExtension = ".pdf";
+            } else {
+                // Generate Excel for all scenarios
+                resource = exportService.generateExcelFromAllScenarios(allScenariosData);
+                contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+                fileExtension = ".xlsx";
+            }
+
+            if (resource == null) {
+                return ResponseEntity.internalServerError().build();
+            }
+
+            String downloadFileName = "all-test-scenarios-" + file.getId() + fileExtension;
+
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + downloadFileName + "\"")
+                    .contentType(MediaType.parseMediaType(contentType))
+                    .body(resource);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.internalServerError().build();
+        }
+    }
 
     @PatchMapping("/files/{fileId}/scenarios/{pathId}")
     public ResponseEntity<String> updateData(

@@ -7,6 +7,7 @@ import jakarta.persistence.*;
 import org.hibernate.annotations.Type;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -55,6 +56,9 @@ public class BpmnFile {
     @JoinColumn(name = "owner_id")
     @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "password"})
     private User owner;
+
+    @OneToMany(mappedBy = "bpmnFile", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<BpmnResult> results = new ArrayList<>();
 
     // getters & setters
     public Long getId() { return id; }

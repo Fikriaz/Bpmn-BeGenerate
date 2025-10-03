@@ -15,11 +15,154 @@ import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.Map;
 import java.util.Date;
+import java.util.ArrayList;
+import java.util.HashMap;
 
 @Service
 public class ExportService {
 
-    // SINGLE SCENARIO EXCEL - KEEP AS IS
+    // ============= HELPER METHOD - Convert input_data to List format =============
+    private List<Map<String, Object>> processInputDataToList(Object inputDataObj) {
+        if (inputDataObj == null) {
+            return List.of();
+        }
+
+        if (inputDataObj instanceof List) {
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> list = (List<Map<String, Object>>) inputDataObj;
+            return list;
+        }
+
+        if (inputDataObj instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> inputDataMap = (Map<String, Object>) inputDataObj;
+
+            List<Map<String, Object>> result = new ArrayList<>();
+
+            inputDataMap.forEach((key, value) -> {
+                Map<String, Object> item = new HashMap<>();
+                item.put("id", key);
+
+                String label = key
+                        .replace("_", " ")
+                        .replaceAll("([A-Z])", " $1")
+                        .trim()
+                        .toLowerCase();
+                label = label.substring(0, 1).toUpperCase() + label.substring(1);
+                item.put("label", label);
+
+                if (value instanceof List) {
+                    item.put("type", "array");
+                    @SuppressWarnings("unchecked")
+                    List<Object> arrayValue = (List<Object>) value;
+                    List<Map<String, Object>> processedArray = new ArrayList<>();
+
+                    for (int i = 0; i < arrayValue.size(); i++) {
+                        Object arrItem = arrayValue.get(i);
+                        Map<String, Object> arrayItemMap = new HashMap<>();
+                        arrayItemMap.put("id", key + "_" + i);
+                        arrayItemMap.put("index", i);
+
+                        if (arrItem instanceof Map) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> objItem = (Map<String, Object>) arrItem;
+                            List<Map<String, Object>> properties = new ArrayList<>();
+                            objItem.forEach((k, v) -> {
+                                Map<String, Object> prop = new HashMap<>();
+                                prop.put("key", k);
+                                prop.put("value", String.valueOf(v));
+                                properties.add(prop);
+                            });
+                            arrayItemMap.put("properties", properties);
+                        } else {
+                            arrayItemMap.put("value", String.valueOf(arrItem));
+                        }
+                        processedArray.add(arrayItemMap);
+                    }
+                    item.put("value", processedArray);
+
+                } else if (value instanceof Map) {
+                    item.put("type", "object");
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> objectValue = (Map<String, Object>) value;
+                    List<Map<String, Object>> properties = new ArrayList<>();
+                    objectValue.forEach((k, v) -> {
+                        Map<String, Object> prop = new HashMap<>();
+                        prop.put("key", k);
+                        prop.put("value", String.valueOf(v));
+                        properties.add(prop);
+                    });
+                    item.put("value", properties);
+
+                } else {
+                    item.put("type", "primitive");
+                    item.put("value", String.valueOf(value));
+                }
+
+                result.add(item);
+            });
+
+            return result;
+        }
+
+        return List.of();
+    }
+
+    private String extractExpectedResult(Object expectedResultObj) {
+        if (expectedResultObj == null) {
+            return "-";
+        }
+
+        if (expectedResultObj instanceof String) {
+            return (String) expectedResultObj;
+        }
+
+        if (expectedResultObj instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> resultMap = (Map<String, Object>) expectedResultObj;
+            Object message = resultMap.get("message");
+            return message != null ? String.valueOf(message) : "-";
+        }
+
+        return String.valueOf(expectedResultObj);
+    }
+
+    // ============= NEW METHOD - Extract action steps from scenario_step (LLM-generated) =============
+    private List<String> extractActionStepsFromScenario(String scenarioStep) {
+        if (scenarioStep == null || scenarioStep.trim().isEmpty()) {
+            return List.of();
+        }
+
+        // Parse scenario_step that has format:
+        // 1. Step text
+        // 2. Step text
+        // or
+        // -> [Lane] Step text
+        List<String> steps = new ArrayList<>();
+        String[] lines = scenarioStep.split("\n");
+
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) continue;
+
+            // Remove numbering (1. 2. etc)
+            String cleaned = trimmed.replaceFirst("^\\d+\\.\\s*", "");
+            // Remove arrow prefix (-> )
+            cleaned = cleaned.replaceFirst("^->\\s*", "");
+            // Remove lane prefix ([Lane] )
+            cleaned = cleaned.replaceFirst("^\\[.*?\\]\\s*", "");
+            // Remove trailing dot
+            cleaned = cleaned.replaceFirst("\\.$", "");
+
+            if (!cleaned.trim().isEmpty()) {
+                steps.add(cleaned.trim());
+            }
+        }
+
+        return steps.isEmpty() ? List.of("-") : steps;
+    }
+
+    // SINGLE SCENARIO EXCEL
     public Resource generateExcelFromScenario(Map<String, Object> scenarioData) {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Test Scenario");
@@ -53,7 +196,7 @@ public class ExportService {
             createHeaderCell(headerRow, 0, "Path ID", headerStyle);
             createHeaderCell(headerRow, 1, "Summary Step", headerStyle);
             createHeaderCell(headerRow, 2, "Action Step", headerStyle);
-            createHeaderCell(headerRow, 3, "Data Uji", headerStyle);
+            createHeaderCell(headerRow, 3, "Test Data", headerStyle);
             createHeaderCell(headerRow, 4, "Expected Result", headerStyle);
             createHeaderCell(headerRow, 5, "Actual Result", headerStyle);
             createHeaderCell(headerRow, 6, "Tester", headerStyle);
@@ -120,11 +263,12 @@ public class ExportService {
                 int lastDataRow = rowNum - 1;
 
                 if (actionSteps.size() > 1) {
-                    sheet.addMergedRegion(new CellRangeAddress(firstDataRow, lastDataRow, 0, 0));
-                    sheet.addMergedRegion(new CellRangeAddress(firstDataRow, lastDataRow, 1, 1));
-                    sheet.addMergedRegion(new CellRangeAddress(firstDataRow, lastDataRow, 3, 3));
-                    sheet.addMergedRegion(new CellRangeAddress(firstDataRow, lastDataRow, 4, 4));
-                    sheet.addMergedRegion(new CellRangeAddress(firstDataRow, lastDataRow, 6, 6));
+                    sheet.addMergedRegion(new CellRangeAddress(firstDataRow, lastDataRow, 0, 0)); // Path ID
+                    sheet.addMergedRegion(new CellRangeAddress(firstDataRow, lastDataRow, 1, 1)); // Summary Step
+                    sheet.addMergedRegion(new CellRangeAddress(firstDataRow, lastDataRow, 3, 3)); // Test Data
+                    sheet.addMergedRegion(new CellRangeAddress(firstDataRow, lastDataRow, 4, 4)); // Expected Result
+                    sheet.addMergedRegion(new CellRangeAddress(firstDataRow, lastDataRow, 5, 5)); // Actual Result
+                    sheet.addMergedRegion(new CellRangeAddress(firstDataRow, lastDataRow, 6, 6)); // Tester
                 }
 
             } else {
@@ -138,13 +282,21 @@ public class ExportService {
                 createDataCell(dataRow, 6, finalTesterName, dataStyle);
             }
 
-            sheet.setColumnWidth(0, 2500);
-            sheet.setColumnWidth(1, 8000);
-            sheet.setColumnWidth(2, 8000);
-            sheet.setColumnWidth(3, 5000);
-            sheet.setColumnWidth(4, 6000);
-            sheet.setColumnWidth(5, 4000);
-            sheet.setColumnWidth(6, 3000);
+            // Set fixed widths for most columns
+            sheet.setColumnWidth(0, 2500);  // Path ID
+            sheet.setColumnWidth(1, 8000);  // Summary Step
+            sheet.setColumnWidth(2, 8000);  // Action Step
+            // Column 3 (Test Data) will be auto-sized below
+            sheet.setColumnWidth(4, 6000);  // Expected Result
+            sheet.setColumnWidth(5, 3000);  // Actual Result
+            sheet.setColumnWidth(6, 3000);  // Tester
+
+            // Auto-resize Test Data column (index 3) - IMPROVED
+            sheet.autoSizeColumn(3);
+            int currentWidth = sheet.getColumnWidth(3);
+            // Ensure minimum width of 10000 (wider) and add 15% padding
+            int newWidth = Math.max(10000, (int) (currentWidth * 1.15));
+            sheet.setColumnWidth(3, newWidth);
 
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
             workbook.write(outputStream);
@@ -157,7 +309,7 @@ public class ExportService {
         }
     }
 
-    // UPDATED: ALL SCENARIOS EXCEL - SAME FORMAT AS SINGLE SCENARIO
+    // ALL SCENARIOS EXCEL
     public Resource generateExcelFromAllScenarios(Map<String, Object> allScenariosData) {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("All Test Scenarios");
@@ -204,7 +356,7 @@ public class ExportService {
             createHeaderCell(headerRow, 0, "Path ID", headerStyle);
             createHeaderCell(headerRow, 1, "Summary Step", headerStyle);
             createHeaderCell(headerRow, 2, "Action Step", headerStyle);
-            createHeaderCell(headerRow, 3, "Data Uji", headerStyle);
+            createHeaderCell(headerRow, 3, "Test Data", headerStyle);
             createHeaderCell(headerRow, 4, "Expected Result", headerStyle);
             createHeaderCell(headerRow, 5, "Actual Result", headerStyle);
             createHeaderCell(headerRow, 6, "Tester", headerStyle);
@@ -216,24 +368,19 @@ public class ExportService {
                 finalTesterName = testerName.trim();
             }
 
-            // Process each scenario with action steps in separate rows
             for (Map<String, Object> scenario : scenarios) {
                 String pathId = (String) scenario.get("path_id");
                 String description = scenario.get("readable_description") != null
                         ? (String) scenario.get("readable_description")
                         : (String) scenario.get("summary");
 
-                @SuppressWarnings("unchecked")
-                List<String> rawPath = (List<String>) scenario.get("rawPath");
+                // ✅ FIXED: Use scenario_step instead of rawPath
+                List<String> actionSteps = extractActionStepsFromScenario((String) scenario.get("scenario_step"));
 
-                // Extract action steps from rawPath
-                List<String> actionSteps = extractActionSteps(rawPath);
-
-                @SuppressWarnings("unchecked")
-                List<Map<String, Object>> testData = (List<Map<String, Object>>) scenario.get("input_data");
+                List<Map<String, Object>> testData = processInputDataToList(scenario.get("input_data"));
                 String formattedTestData = formatTestDataForTable(testData);
 
-                String expectedResult = (String) scenario.get("expected_result");
+                String expectedResult = extractExpectedResult(scenario.get("expected_result"));
 
                 if (actionSteps != null && !actionSteps.isEmpty()) {
                     int firstRowOfScenario = rowNum;
@@ -241,41 +388,34 @@ public class ExportService {
                     for (int i = 0; i < actionSteps.size(); i++) {
                         Row dataRow = sheet.createRow(rowNum++);
 
-                        // Path ID (only first row)
                         if (i == 0) {
                             createDataCell(dataRow, 0, pathId, dataStyle);
                         } else {
                             createDataCell(dataRow, 0, "", dataStyle);
                         }
 
-                        // Summary Step (only first row)
                         if (i == 0) {
                             createDataCell(dataRow, 1, description, dataStyle);
                         } else {
                             createDataCell(dataRow, 1, "", dataStyle);
                         }
 
-                        // Action Step (each step gets its own row)
                         createDataCell(dataRow, 2, "Step " + (i + 1) + ": " + actionSteps.get(i), dataStyle);
 
-                        // Data Uji (only first row)
                         if (i == 0) {
                             createDataCell(dataRow, 3, formattedTestData, dataStyle);
                         } else {
                             createDataCell(dataRow, 3, "", dataStyle);
                         }
 
-                        // Expected Result (only first row)
                         if (i == 0) {
                             createDataCell(dataRow, 4, expectedResult, dataStyle);
                         } else {
                             createDataCell(dataRow, 4, "", dataStyle);
                         }
 
-                        // Actual Result (empty)
                         createDataCell(dataRow, 5, "", dataStyle);
 
-                        // Tester (only first row)
                         if (i == 0) {
                             createDataCell(dataRow, 6, finalTesterName, dataStyle);
                         } else {
@@ -283,17 +423,16 @@ public class ExportService {
                         }
                     }
 
-                    // Merge cells for columns that should span multiple rows
                     int lastRowOfScenario = rowNum - 1;
                     if (actionSteps.size() > 1) {
                         sheet.addMergedRegion(new CellRangeAddress(firstRowOfScenario, lastRowOfScenario, 0, 0)); // Path ID
-                        sheet.addMergedRegion(new CellRangeAddress(firstRowOfScenario, lastRowOfScenario, 1, 1)); // Summary
-                        sheet.addMergedRegion(new CellRangeAddress(firstRowOfScenario, lastRowOfScenario, 3, 3)); // Data Uji
+                        sheet.addMergedRegion(new CellRangeAddress(firstRowOfScenario, lastRowOfScenario, 1, 1)); // Summary Step
+                        sheet.addMergedRegion(new CellRangeAddress(firstRowOfScenario, lastRowOfScenario, 3, 3)); // Test Data
                         sheet.addMergedRegion(new CellRangeAddress(firstRowOfScenario, lastRowOfScenario, 4, 4)); // Expected Result
+                        sheet.addMergedRegion(new CellRangeAddress(firstRowOfScenario, lastRowOfScenario, 5, 5)); // Actual Result
                         sheet.addMergedRegion(new CellRangeAddress(firstRowOfScenario, lastRowOfScenario, 6, 6)); // Tester
                     }
                 } else {
-                    // If no action steps, create single row
                     Row dataRow = sheet.createRow(rowNum++);
                     createDataCell(dataRow, 0, pathId, dataStyle);
                     createDataCell(dataRow, 1, description, dataStyle);
@@ -305,13 +444,21 @@ public class ExportService {
                 }
             }
 
-            sheet.setColumnWidth(0, 2500);
-            sheet.setColumnWidth(1, 8000);
-            sheet.setColumnWidth(2, 8000);
-            sheet.setColumnWidth(3, 5000);
-            sheet.setColumnWidth(4, 6000);
-            sheet.setColumnWidth(5, 4000);
-            sheet.setColumnWidth(6, 3000);
+            // Set fixed widths for most columns
+            sheet.setColumnWidth(0, 2500);  // Path ID
+            sheet.setColumnWidth(1, 8000);  // Summary Step
+            sheet.setColumnWidth(2, 8000);  // Action Step
+            // Column 3 (Test Data) will be auto-sized below
+            sheet.setColumnWidth(4, 6000);  // Expected Result
+            sheet.setColumnWidth(5, 3000);  // Actual Result
+            sheet.setColumnWidth(6, 3000);  // Tester
+
+            // Auto-resize Test Data column (index 3) - IMPROVED
+            sheet.autoSizeColumn(3);
+            int currentWidth = sheet.getColumnWidth(3);
+            // Ensure minimum width of 10000 (wider) and add 15% padding
+            int newWidth = Math.max(10000, (int) (currentWidth * 1.15));
+            sheet.setColumnWidth(3, newWidth);
 
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
             workbook.write(outputStream);
@@ -324,12 +471,12 @@ public class ExportService {
         }
     }
 
-    // NEW: Generate PDF for All Scenarios
+    // ALL SCENARIOS PDF
     public Resource generatePdfFromAllScenarios(Map<String, Object> allScenariosData) {
         try {
-            Document document = new Document(PageSize.A4.rotate(), 36, 36, 54, 54); // Landscape for table
+            Document document = new Document(PageSize.A4.rotate(), 36, 36, 54, 54);
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            PdfWriter writer = PdfWriter.getInstance(document, outputStream);
+            PdfWriter.getInstance(document, outputStream);
 
             document.open();
 
@@ -364,14 +511,12 @@ public class ExportService {
                 finalTesterName = testerName.trim();
             }
 
-            // Create table with 7 columns
             PdfPTable table = new PdfPTable(7);
             table.setWidthPercentage(100);
-            table.setWidths(new float[]{10, 20, 25, 15, 15, 10, 10});
+            table.setWidths(new float[]{10, 20, 25, 18, 15, 7, 10});
 
-            // Table header
             BaseColor headerBg = new BaseColor(44, 90, 160);
-            String[] headers = {"Path ID", "Summary Step", "Action Step", "Data Uji", "Expected Result", "Actual Result", "Tester"};
+            String[] headers = {"Path ID", "Summary Step", "Action Step", "Test Data", "Expected Result", "Actual Result", "Tester"};
             for (String header : headers) {
                 PdfPCell cell = new PdfPCell(new Phrase(header, headerFont));
                 cell.setBackgroundColor(headerBg);
@@ -381,28 +526,24 @@ public class ExportService {
                 table.addCell(cell);
             }
 
-            // Process each scenario
             for (Map<String, Object> scenario : scenarios) {
                 String pathId = (String) scenario.get("path_id");
                 String description = scenario.get("readable_description") != null
                         ? (String) scenario.get("readable_description")
                         : (String) scenario.get("summary");
 
-                @SuppressWarnings("unchecked")
-                List<String> rawPath = (List<String>) scenario.get("rawPath");
-                List<String> actionSteps = extractActionSteps(rawPath);
+                // ✅ FIXED: Use scenario_step instead of rawPath
+                List<String> actionSteps = extractActionStepsFromScenario((String) scenario.get("scenario_step"));
 
-                @SuppressWarnings("unchecked")
-                List<Map<String, Object>> testData = (List<Map<String, Object>>) scenario.get("input_data");
+                List<Map<String, Object>> testData = processInputDataToList(scenario.get("input_data"));
                 String formattedTestData = formatTestDataForTable(testData);
 
-                String expectedResult = (String) scenario.get("expected_result");
+                String expectedResult = extractExpectedResult(scenario.get("expected_result"));
 
                 if (actionSteps != null && !actionSteps.isEmpty()) {
                     int rowspan = actionSteps.size();
 
                     for (int i = 0; i < actionSteps.size(); i++) {
-                        // Path ID (rowspan)
                         if (i == 0) {
                             PdfPCell cell = new PdfPCell(new Phrase(pathId, dataFont));
                             cell.setRowspan(rowspan);
@@ -411,7 +552,6 @@ public class ExportService {
                             table.addCell(cell);
                         }
 
-                        // Summary Step (rowspan)
                         if (i == 0) {
                             PdfPCell cell = new PdfPCell(new Phrase(description, dataFont));
                             cell.setRowspan(rowspan);
@@ -420,13 +560,11 @@ public class ExportService {
                             table.addCell(cell);
                         }
 
-                        // Action Step (each step)
                         PdfPCell stepCell = new PdfPCell(new Phrase("Step " + (i + 1) + ": " + actionSteps.get(i), stepFont));
                         stepCell.setPadding(5);
                         stepCell.setVerticalAlignment(Element.ALIGN_TOP);
                         table.addCell(stepCell);
 
-                        // Data Uji (rowspan)
                         if (i == 0) {
                             PdfPCell cell = new PdfPCell(new Phrase(formattedTestData, stepFont));
                             cell.setRowspan(rowspan);
@@ -435,7 +573,6 @@ public class ExportService {
                             table.addCell(cell);
                         }
 
-                        // Expected Result (rowspan)
                         if (i == 0) {
                             PdfPCell cell = new PdfPCell(new Phrase(expectedResult, dataFont));
                             cell.setRowspan(rowspan);
@@ -444,12 +581,13 @@ public class ExportService {
                             table.addCell(cell);
                         }
 
-                        // Actual Result (empty)
-                        PdfPCell actualCell = new PdfPCell(new Phrase("", dataFont));
-                        actualCell.setPadding(5);
-                        table.addCell(actualCell);
+                        if (i == 0) {
+                            PdfPCell actualCell = new PdfPCell(new Phrase("", dataFont));
+                            actualCell.setRowspan(rowspan);
+                            actualCell.setPadding(5);
+                            table.addCell(actualCell);
+                        }
 
-                        // Tester (rowspan)
                         if (i == 0) {
                             PdfPCell cell = new PdfPCell(new Phrase(finalTesterName, dataFont));
                             cell.setRowspan(rowspan);
@@ -459,7 +597,6 @@ public class ExportService {
                         }
                     }
                 } else {
-                    // Single row if no action steps
                     table.addCell(new PdfPCell(new Phrase(pathId, dataFont)));
                     table.addCell(new PdfPCell(new Phrase(description, dataFont)));
                     table.addCell(new PdfPCell(new Phrase("-", dataFont)));
@@ -481,113 +618,156 @@ public class ExportService {
         }
     }
 
-    // Helper: Extract action steps from rawPath
-    private List<String> extractActionSteps(List<String> rawPath) {
-        if (rawPath == null || rawPath.isEmpty()) {
-            return List.of();
-        }
-
-        // Remove [Lane] prefix from each step
-        return rawPath.stream()
-                .map(step -> step.replaceAll("^\\[.*?\\]\\s*", ""))
-                .filter(step -> !step.trim().isEmpty())
-                .toList();
-    }
-
-    // SINGLE SCENARIO PDF - KEEP AS IS
+    // SINGLE SCENARIO PDF (dibuat selaras dengan ALL PDF: pakai tabel 7 kolom + rowspan)
     public Resource generatePdfFromScenario(Map<String, Object> scenarioData) {
         try {
-            Document document = new Document(PageSize.A4, 36, 36, 54, 54);
+            // Samakan orientasi & margin seperti ALL PDF
+            Document document = new Document(PageSize.A4.rotate(), 36, 36, 54, 54);
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            PdfWriter writer = PdfWriter.getInstance(document, outputStream);
+            PdfWriter.getInstance(document, outputStream);
 
             document.open();
 
-            Font titleFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 18, BaseColor.DARK_GRAY);
-            Font labelFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 12, BaseColor.BLACK);
-            Font valueFont = FontFactory.getFont(FontFactory.HELVETICA, 11, BaseColor.BLACK);
-            Font dataFont = FontFactory.getFont(FontFactory.COURIER, 10, BaseColor.BLACK);
+            // Font & warna disamakan
+            Font titleFont  = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 18, BaseColor.DARK_GRAY);
+            Font headerFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 10, BaseColor.WHITE);
+            Font dataFont   = FontFactory.getFont(FontFactory.HELVETICA, 8, BaseColor.BLACK);
+            Font stepFont   = FontFactory.getFont(FontFactory.HELVETICA, 7, BaseColor.BLACK);
 
+            // Judul
             Paragraph title = new Paragraph("TEST SCENARIO REPORT", titleFont);
             title.setAlignment(Element.ALIGN_CENTER);
-            title.setSpacingAfter(20);
+            title.setSpacingAfter(15);
             document.add(title);
 
-            PdfPTable infoTable = new PdfPTable(2);
-            infoTable.setWidthPercentage(100);
-            infoTable.setWidths(new float[]{30, 70});
+            // Info file & waktu (di tengah, sama seperti ALL PDF)
+            Paragraph fileInfo = new Paragraph(
+                    "File: " + scenarioData.get("fileName") + " | Generated: " + new Date().toString(),
+                    dataFont
+            );
+            fileInfo.setAlignment(Element.ALIGN_CENTER);
+            fileInfo.setSpacingAfter(20);
+            document.add(fileInfo);
 
-            addTableRow(infoTable, "File Name:", (String) scenarioData.get("fileName"), labelFont, valueFont);
-            addTableRow(infoTable, "Path ID:", (String) scenarioData.get("pathId"), labelFont, valueFont);
+            // Ambil field data
+            String pathId      = (String) scenarioData.get("pathId");
+            String description = (String) scenarioData.get("description");
 
+            // Action steps: pakai list jika sudah tersedia; kalau tidak, parse dari scenario_step
+            @SuppressWarnings("unchecked")
+            List<String> actionStepsRaw = (List<String>) scenarioData.get("actionSteps");
+            List<String> actionSteps =
+                    (actionStepsRaw != null && !actionStepsRaw.isEmpty())
+                            ? actionStepsRaw
+                            : extractActionStepsFromScenario((String) scenarioData.get("scenario_step"));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> testDataList = (List<Map<String, Object>>) scenarioData.get("testData");
+            String formattedTestData = formatTestDataForTable(testDataList);
+
+            String expectedResult = (String) scenarioData.get("expectedResult");
+
+            // Tester opsional
+            String finalTesterName = "";
             Boolean includeTester = (Boolean) scenarioData.get("includeTester");
             String testerName = (String) scenarioData.get("testerName");
-            if (includeTester != null && includeTester && testerName != null && !testerName.trim().isEmpty()) {
-                addTableRow(infoTable, "Tester:", testerName, labelFont, valueFont);
+            if (includeTester != null && includeTester != false && testerName != null && !testerName.trim().isEmpty()) {
+                finalTesterName = testerName.trim();
             }
 
-            addTableRow(infoTable, "Generated:", new Date().toString(), labelFont, valueFont);
+            // ===== TABEL 7 kolom (sama seperti ALL PDF) =====
+            PdfPTable table = new PdfPTable(7);
+            table.setWidthPercentage(100);
+            table.setWidths(new float[]{10, 20, 25, 18, 15, 7, 10}); // konsisten dengan ALL PDF
 
-            document.add(infoTable);
-            document.add(new Paragraph(" "));
+            BaseColor headerBg = new BaseColor(44, 90, 160);
+            String[] headers = {"Path ID", "Summary Step", "Action Step", "Test Data", "Expected Result", "Actual Result", "Tester"};
+            for (String h : headers) {
+                PdfPCell cell = new PdfPCell(new Phrase(h, headerFont));
+                cell.setBackgroundColor(headerBg);
+                cell.setPadding(8);
+                cell.setHorizontalAlignment(Element.ALIGN_CENTER);
+                cell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+                table.addCell(cell);
+            }
 
-            addLabelValuePdf(document, "Description:", (String) scenarioData.get("description"), labelFont, valueFont);
-            document.add(new Paragraph(" "));
-
-            @SuppressWarnings("unchecked")
-            List<String> actionSteps = (List<String>) scenarioData.get("actionSteps");
+            // Baris data dengan rowspan seperti ALL PDF
             if (actionSteps != null && !actionSteps.isEmpty()) {
-                Paragraph actionHeader = new Paragraph("Action Steps:", labelFont);
-                actionHeader.setSpacingAfter(10);
-                document.add(actionHeader);
+                int rowspan = actionSteps.size();
 
                 for (int i = 0; i < actionSteps.size(); i++) {
-                    Paragraph step = new Paragraph((i + 1) + ". " + actionSteps.get(i), valueFont);
-                    step.setIndentationLeft(20);
-                    step.setSpacingAfter(5);
-                    document.add(step);
-                }
-                document.add(new Paragraph(" "));
-            }
-
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> testData = (List<Map<String, Object>>) scenarioData.get("testData");
-            if (testData != null && !testData.isEmpty()) {
-                Paragraph testDataHeader = new Paragraph("Test Data:", labelFont);
-                testDataHeader.setSpacingAfter(10);
-                document.add(testDataHeader);
-
-                for (int i = 0; i < testData.size(); i++) {
-                    Map<String, Object> item = testData.get(i);
-                    String dataText = (i + 1) + ". " + item.get("label") + ": ";
-
-                    if ("array".equals(item.get("type"))) {
-                        @SuppressWarnings("unchecked")
-                        List<Map<String, Object>> arrayValues = (List<Map<String, Object>>) item.get("value");
-                        dataText += formatArrayValueForPdf(arrayValues);
-                    } else if ("object".equals(item.get("type"))) {
-                        @SuppressWarnings("unchecked")
-                        List<Map<String, Object>> objectValues = (List<Map<String, Object>>) item.get("value");
-                        dataText += formatObjectValueForPdf(objectValues);
-                    } else {
-                        dataText += item.get("value");
+                    // Path ID (rowspan di baris pertama)
+                    if (i == 0) {
+                        PdfPCell c = new PdfPCell(new Phrase(pathId != null ? pathId : "", dataFont));
+                        c.setRowspan(rowspan);
+                        c.setPadding(5);
+                        c.setVerticalAlignment(Element.ALIGN_MIDDLE);
+                        table.addCell(c);
                     }
 
-                    Paragraph dataItem = new Paragraph(dataText, dataFont);
-                    dataItem.setIndentationLeft(20);
-                    dataItem.setSpacingAfter(8);
-                    document.add(dataItem);
+                    // Summary / Description (rowspan di baris pertama)
+                    if (i == 0) {
+                        PdfPCell c = new PdfPCell(new Phrase(description != null ? description : "", dataFont));
+                        c.setRowspan(rowspan);
+                        c.setPadding(5);
+                        c.setVerticalAlignment(Element.ALIGN_TOP);
+                        table.addCell(c);
+                    }
+
+                    // Action Step (tiap baris)
+                    String stepText = "Step " + (i + 1) + ": " + actionSteps.get(i);
+                    PdfPCell stepCell = new PdfPCell(new Phrase(stepText, stepFont));
+                    stepCell.setPadding(5);
+                    stepCell.setVerticalAlignment(Element.ALIGN_TOP);
+                    table.addCell(stepCell);
+
+                    // Test Data (rowspan di baris pertama)
+                    if (i == 0) {
+                        PdfPCell c = new PdfPCell(new Phrase(formattedTestData != null ? formattedTestData : "-", stepFont));
+                        c.setRowspan(rowspan);
+                        c.setPadding(5);
+                        c.setVerticalAlignment(Element.ALIGN_TOP);
+                        table.addCell(c);
+                    }
+
+                    // Expected Result (rowspan di baris pertama)
+                    if (i == 0) {
+                        PdfPCell c = new PdfPCell(new Phrase(expectedResult != null ? expectedResult : "-", dataFont));
+                        c.setRowspan(rowspan);
+                        c.setPadding(5);
+                        c.setVerticalAlignment(Element.ALIGN_TOP);
+                        table.addCell(c);
+                    }
+
+                    // Actual Result (rowspan di baris pertama – dikosongkan)
+                    if (i == 0) {
+                        PdfPCell c = new PdfPCell(new Phrase("", dataFont));
+                        c.setRowspan(rowspan);
+                        c.setPadding(5);
+                        table.addCell(c);
+                    }
+
+                    // Tester (rowspan di baris pertama – opsional)
+                    if (i == 0) {
+                        PdfPCell c = new PdfPCell(new Phrase(finalTesterName, dataFont));
+                        c.setRowspan(rowspan);
+                        c.setPadding(5);
+                        c.setVerticalAlignment(Element.ALIGN_MIDDLE);
+                        table.addCell(c);
+                    }
                 }
-                document.add(new Paragraph(" "));
+            } else {
+                // Tidak ada step -> satu baris datar
+                table.addCell(new PdfPCell(new Phrase(pathId != null ? pathId : "", dataFont)));
+                table.addCell(new PdfPCell(new Phrase(description != null ? description : "", dataFont)));
+                table.addCell(new PdfPCell(new Phrase("-", stepFont)));
+                table.addCell(new PdfPCell(new Phrase(formattedTestData != null ? formattedTestData : "-", stepFont)));
+                table.addCell(new PdfPCell(new Phrase(expectedResult != null ? expectedResult : "-", dataFont)));
+                table.addCell(new PdfPCell(new Phrase("", dataFont))); // Actual Result
+                table.addCell(new PdfPCell(new Phrase(finalTesterName, dataFont)));
             }
 
-            addLabelValuePdf(document, "Expected Result:", (String) scenarioData.get("expectedResult"), labelFont, valueFont);
-
-            if (includeTester != null && includeTester && testerName != null && !testerName.trim().isEmpty()) {
-                document.add(new Paragraph(" "));
-                addLabelValuePdf(document, "Tested by:", testerName, labelFont, valueFont);
-            }
-
+            document.add(table);
             document.close();
 
             return new ByteArrayResource(outputStream.toByteArray());
@@ -597,6 +777,7 @@ public class ExportService {
             return null;
         }
     }
+
 
     // Helper methods
     private void createHeaderCell(Row row, int colIndex, String value, XSSFCellStyle style) {

@@ -19,7 +19,7 @@ public class CorsConfig {
                                 "https://automation-test.up.railway.app", // optional
                                 "https://bpmn-generator-kohl.vercel.app" // nanti kalau deploy FE
                         )
-                        .allowedMethods("*")
+                        .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
                         .allowedHeaders("*")
                         .allowCredentials(true);
             }

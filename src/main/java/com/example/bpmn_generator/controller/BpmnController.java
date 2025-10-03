@@ -485,4 +485,50 @@ public class BpmnController {
         return fileOpt.map(file -> ResponseEntity.ok(file.getTestScenariosJson()))
                 .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(null));
     }
+
+    // com.example.bpmn_generator.controller.BpmnController
+
+
+    // ====== Hapus BANYAK file (checkbox) ======
+// body: { "ids":[1,2,3] }
+    @DeleteMapping("/files")
+    public ResponseEntity<Map<String, Object>> deleteMany(@RequestBody Map<String, Object> body) {
+        String username = currentUsername();
+        System.out.println("=== DELETE MANY DEBUG ===");
+        System.out.println("Username: " + username);
+        System.out.println("Request body: " + body);
+
+        if (username == null) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+
+        @SuppressWarnings("unchecked")
+        List<Integer> idsInt = (List<Integer>) body.get("ids");
+        System.out.println("Parsed IDs: " + idsInt);
+
+        if (idsInt == null || idsInt.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Field 'ids' wajib diisi"));
+        }
+
+        List<Long> ids = idsInt.stream().map(Integer::longValue).toList();
+
+        // Check ownership
+        List<BpmnFile> owned = bpmnRepository.findAllByOwnerUsername(username)
+                .stream().filter(f -> ids.contains(f.getId())).toList();
+
+        System.out.println("Found owned files: " + owned.size());
+        System.out.println("Requested IDs: " + ids);
+
+        if (owned.stream().anyMatch(f -> Boolean.TRUE.equals(f.isGeneratingScenario()))) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("error", "Ada file yang sedang generate. Batalkan/selesaikan dulu."));
+        }
+
+        int count = bpmnService.deleteManyOwned(username, ids);
+        System.out.println("Deleted count: " + count);
+        System.out.println("====================\n");
+
+        return ResponseEntity.ok(Map.of("deleted", count, "requestedIds", ids));
+    }
+
+
+
 }

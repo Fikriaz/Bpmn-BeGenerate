@@ -4,6 +4,7 @@ import com.example.bpmn_generator.entity.BpmnFile;
 import com.example.bpmn_generator.repository.BpmnRepository;
 import com.example.bpmn_generator.repository.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.transaction.Transactional;
 import org.camunda.bpm.model.bpmn.Bpmn;
 import org.camunda.bpm.model.bpmn.BpmnModelInstance;
 import org.camunda.bpm.model.bpmn.instance.*;
@@ -618,4 +619,61 @@ public class BpmnService {
         if (missing.isEmpty()) System.out.println("(none)");
         else missing.forEach(System.out::println);
     }
+
+    /** Hapus file fisik di disk, non-fatal jika gagal */
+    public void deletePhysicalFileIfExists(String storedFileName) {
+        if (storedFileName == null || storedFileName.isBlank()) return;
+        try {
+            Path p = getFilePath(storedFileName);
+            if (Files.exists(p)) {
+                Files.delete(p);
+                System.out.println("🗑Deleted physical file: " + p);
+            }
+        } catch (Exception ex) {
+            System.err.println(" Gagal hapus file fisik: " + ex.getMessage());
+        }
+    }
+
+    /** Hapus satu file milik user (fisik + DB) */
+    @Transactional
+    public void deleteOneOwned(BpmnFile file) {
+        deletePhysicalFileIfExists(file.getStoredFileName());
+        bpmnRepository.delete(file);
+    }
+
+    /** Hapus banyak file milik user berdasarkan list id */
+    @Transactional
+    public int deleteManyOwned(String username, List<Long> ids) {
+        // Ambil file yang benar-benar owned
+        List<BpmnFile> owned = bpmnRepository.findAllByOwnerUsername(username)
+                .stream()
+                .filter(f -> ids.contains(f.getId()))
+                .toList();
+
+        // Hapus physical files
+        for (BpmnFile f : owned) {
+            deletePhysicalFileIfExists(f.getStoredFileName());
+        }
+
+        // Delete dari database
+        bpmnRepository.deleteAll(owned);  // ✅ Gunakan deleteAll() standard
+
+        return owned.size();
+    }
+
+    @Transactional
+    public int deleteAllOwned(String username) {
+        List<BpmnFile> owned = bpmnRepository.findAllByOwnerUsername(username);
+
+        // Hapus physical files
+        for (BpmnFile f : owned) {
+            deletePhysicalFileIfExists(f.getStoredFileName());
+        }
+
+        // Delete dari database
+        bpmnRepository.deleteAll(owned);  // ✅ Gunakan deleteAll() standard
+
+        return owned.size();
+    }
+
 }
